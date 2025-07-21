@@ -1,0 +1,187 @@
+esphome:
+  name: devices
+  friendly_name: Devices
+
+logger:
+api:
+host:
+
+output:
+  - platform: gpio
+    pin: 12
+    id: out_living_ceiling
+  - platform: gpio
+    pin: 13
+    id: out_bedroom_lamp
+  - platform: gpio
+    pin: 14
+    id: out_kitchen
+  - platform: gpio
+    pin: 15
+    id: out_garage
+  - platform: gpio
+    pin: 18
+    id: out_office_desk
+  - platform: gpio
+    pin: 19
+    id: out_bathroom_mirror
+  - platform: gpio
+    pin: 21
+    id: out_balcony
+  - platform: gpio
+    pin: 22
+    id: out_garden
+  - platform: gpio
+    pin: 23
+    id: out_hallway
+  - platform: gpio
+    pin: 25
+    id: out_kids_room
+
+  - platform: template
+    id: fan_speed_output
+    type: float
+    write_action:
+      lambda: |-
+        ESP_LOGD("main", "Fan speed set to %.1f%%", state * 100.0);
+
+  - platform: template
+    id: ac_temp_control
+    type: float
+    write_action:
+      lambda: |-
+        ESP_LOGD("main", "AC temp set to %.1f°C", 16.0 + (state * 10.0));
+
+  - platform: template
+    id: dim_lamp_output
+    type: float
+    write_action:
+      lambda: |-
+        ESP_LOGD("main", "Lamp brightness set to %.1f%%", state * 100.0);
+
+light:
+  - platform: binary
+    name: "Living Room Ceiling"
+    output: out_living_ceiling
+  - platform: binary
+    name: "Bedroom Lamp"
+    output: out_bedroom_lamp
+  - platform: binary
+    name: "Kitchen Strip Light"
+    output: out_kitchen
+  - platform: binary
+    name: "Garage Light"
+    output: out_garage
+  - platform: binary
+    name: "Office Desk Lamp"
+    output: out_office_desk
+  - platform: binary
+    name: "Bathroom Mirror Light"
+    output: out_bathroom_mirror
+  - platform: binary
+    name: "Balcony Light"
+    output: out_balcony
+  - platform: binary
+    name: "Garden Light"
+    output: out_garden
+  - platform: binary
+    name: "Hallway Light"
+    output: out_hallway
+  - platform: binary
+    name: "Kids Room Nightlight"
+    output: out_kids_room
+  - platform: monochromatic
+    name: "Dimmer Lamp"
+    output: dim_lamp_output
+    id: dim_lamp
+
+fan:
+  - platform: speed
+    output: fan_speed_output
+    name: "Ceiling Fan"
+    speed_count: 3
+
+number:
+  - platform: template
+    name: "Room AC Temperature"
+    min_value: 16
+    max_value: 26
+    step: 0.5
+    optimistic: true
+    mode: slider
+    set_action:
+      lambda: |-
+        ESP_LOGD("main", "AC set to %.1f°C", x);
+
+switch:
+  - platform: gpio
+    name: "Water Heater"
+    pin: 26
+  - platform: gpio
+    name: "Air Purifier"
+    pin: 27
+
+binary_sensor:
+  - platform: gpio
+    pin: 28
+    name: "Entrance Motion"
+  - platform: gpio
+    pin: 29
+    name: "Garage Motion"
+
+sensor:
+  - platform: template
+    name: "Indoor Temperature"
+    lambda: |-
+      return 21.8;
+    update_interval: 60s
+
+  - platform: template
+    name: "Humidity"
+    lambda: |-
+      return 48.2;
+    update_interval: 60s
+
+  - platform: template
+    name: "Power Usage"
+    lambda: |-
+      return 378.6;
+    update_interval: 30s
+
+  - platform: template
+    name: "Water Tank Level"
+    lambda: |-
+      return 73.0;
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    update_interval: 60s
+
+  - platform: template
+    name: "Sump Pit Level"
+    lambda: |-
+      return 12.5;
+    unit_of_measurement: "cm"
+    accuracy_decimals: 1
+    update_interval: 60s
+
+button:
+  - platform: restart
+    name: "Reboot System"
+
+  - platform: template
+    name: "Cycle Sprinklers"
+    on_press:
+      then:
+        - logger.log: "Sprinklers cycled."
+
+  - platform: template
+    name: "Toggle Scene: Movie Mode"
+    on_press:
+      then:
+        - logger.log: "Movie mode triggered."
+
+  - platform: template
+    name: "Garage Door Override"
+    on_press:
+      then:
+        - logger.log: "Garage override used."
