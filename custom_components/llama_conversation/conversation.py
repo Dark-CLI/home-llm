@@ -604,30 +604,24 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
     def _format_prompt(
         self, prompt: list[dict], include_generation_prompt: bool = True
     ) -> str:
-        """Format a conversation into a raw text completion using the model's prompt template"""
-        formatted_prompt = ""
+        """Formats the prompt to be just the system prompt plus the user's input."""
 
-        prompt_template = self.entry.options.get(CONF_PROMPT_TEMPLATE, DEFAULT_PROMPT_TEMPLATE)
-        template_desc = PROMPT_TEMPLATE_DESCRIPTIONS[prompt_template]
+        system_prompt = ""
+        # The system prompt is always the first message.
+        if prompt and prompt[0]["role"] == "system":
+            system_prompt = prompt[0]["message"]
 
-        # handle models without a system prompt
-        if prompt[0]["role"] == "system" and "system" not in template_desc:
-            system_prompt = prompt.pop(0)
-            prompt[0]["message"] = system_prompt["message"] + prompt[0]["message"]
+        user_input = ""
+        # The user input is the last message.
+        if prompt and prompt[-1]["role"] == "user":
+            user_input = prompt[-1]["message"]
 
-        for message in prompt:
-            role = message["role"]
-            message = message["message"]
-            # fall back to the "user" role for unknown roles
-            role_desc = template_desc.get(role, template_desc["user"])
-            formatted_prompt = (
-                formatted_prompt + f"{role_desc['prefix']}{message}{role_desc['suffix']}\n"
-            )
+        # If there's only one message and it's a system message, it might be a priming/caching call.
+        # In that case, the user input will be empty, which is fine.
 
-        if include_generation_prompt:
-            formatted_prompt = formatted_prompt + template_desc["generation_prompt"]
+        formatted_prompt = system_prompt + user_input
 
-        _LOGGER.debug(formatted_prompt)
+        _LOGGER.debug(f"Formatted prompt (raw system + user): {formatted_prompt}")
         return formatted_prompt
 
     def _format_tool(self, name: str, parameters: vol.Schema, description: str):
