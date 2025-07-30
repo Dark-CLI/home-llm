@@ -1,4 +1,5 @@
 """Defines the various LLM Backend Agents"""
+
 from __future__ import annotations
 
 import aiohttp
@@ -16,16 +17,41 @@ import time
 import voluptuous as vol
 from typing import Literal, Any, Callable
 
-from homeassistant.components.conversation import ConversationInput, ConversationResult, AbstractConversationAgent, ConversationEntity
+from homeassistant.components.conversation import (
+    ConversationInput,
+    ConversationResult,
+    AbstractConversationAgent,
+    ConversationEntity,
+)
 from homeassistant.components import assist_pipeline, conversation as conversation
 from homeassistant.components.conversation.const import DOMAIN as CONVERSATION_DOMAIN
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, CONF_HOST, CONF_PORT, CONF_SSL, MATCH_ALL, CONF_LLM_HASS_API
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_HOST,
+    CONF_PORT,
+    CONF_SSL,
+    MATCH_ALL,
+    CONF_LLM_HASS_API,
+)
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryError, TemplateError, HomeAssistantError
-from homeassistant.helpers import config_validation as cv, intent, template, entity_registry as er, llm, \
-    area_registry as ar, device_registry as dr, chat_session
+from homeassistant.exceptions import (
+    ConfigEntryNotReady,
+    ConfigEntryError,
+    TemplateError,
+    HomeAssistantError,
+)
+from homeassistant.helpers import (
+    config_validation as cv,
+    intent,
+    template,
+    entity_registry as er,
+    llm,
+    area_registry as ar,
+    device_registry as dr,
+    chat_session,
+)
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change, async_call_later
@@ -35,8 +61,14 @@ from homeassistant.util import ulid, color
 
 import voluptuous_serialize
 
-from .utils import closest_color, flatten_vol_schema, custom_custom_serializer, install_llama_cpp_python, \
-    validate_llama_cpp_python_installation, format_url
+from .utils import (
+    closest_color,
+    flatten_vol_schema,
+    custom_custom_serializer,
+    install_llama_cpp_python,
+    validate_llama_cpp_python_installation,
+    format_url,
+)
 from .const import (
     CONF_CHAT_MODEL,
     CONF_MAX_TOKENS,
@@ -132,6 +164,7 @@ from .const import (
 
 # make type checking work for llama-cpp-python without importing it directly at runtime
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from llama_cpp import Llama as LlamaType
 else:
@@ -140,6 +173,7 @@ else:
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry):
     """Handle options update."""
@@ -151,7 +185,12 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry):
 
     return True
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> bool:
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> bool:
     """Set up Local LLM Conversation from a config entry."""
 
     # handle updates to the options
@@ -162,9 +201,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     return True
 
-def _convert_content(
-    chat_content: conversation.Content
-) -> dict[str, str]:
+
+def _convert_content(chat_content: conversation.Content) -> dict[str, str]:
     """Create tool response content."""
     role_name = None
     if isinstance(chat_content, conversation.ToolResultContent):
@@ -178,20 +216,23 @@ def _convert_content(
     else:
         raise ValueError(f"Unexpected content type: {type(chat_content)}")
 
-    return { "role": role_name, "message": chat_content.content }
+    return {"role": role_name, "message": chat_content.content}
+
 
 def _convert_content_back(
-    agent_id: str,
-    message_history_entry: dict[str, str]
+    agent_id: str, message_history_entry: dict[str, str]
 ) -> conversation.Content:
     if message_history_entry["role"] == "tool":
         return conversation.ToolResultContent(content=message_history_entry["message"])
     if message_history_entry["role"] == "assistant":
-        return conversation.AssistantContent(agent_id=agent_id, content=message_history_entry["message"])
+        return conversation.AssistantContent(
+            agent_id=agent_id, content=message_history_entry["message"]
+        )
     if message_history_entry["role"] == "user":
         return conversation.UserContent(content=message_history_entry["message"])
     if message_history_entry["role"] == "system":
         return conversation.SystemContent(content=message_history_entry["message"])
+
 
 class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
     """Base Local LLM conversation agent."""
@@ -201,7 +242,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
     in_context_examples: list[dict]
 
     _attr_has_entity_name = True
-    _attr_supports_streaming = False # TODO: add support for backends that can stream
+    _attr_supports_streaming = False  # TODO: add support for backends that can stream
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the agent."""
@@ -211,9 +252,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
         self.hass = hass
         self.entry_id = entry.entry_id
 
-        self.backend_type = entry.data.get(
-            CONF_BACKEND_TYPE, DEFAULT_BACKEND_TYPE
-        )
+        self.backend_type = entry.data.get(CONF_BACKEND_TYPE, DEFAULT_BACKEND_TYPE)
 
         if self.entry.options.get(CONF_LLM_HASS_API):
             self._attr_supported_features = (
@@ -221,16 +260,24 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
             )
 
         self.in_context_examples = None
-        if entry.options.get(CONF_USE_IN_CONTEXT_LEARNING_EXAMPLES, DEFAULT_USE_IN_CONTEXT_LEARNING_EXAMPLES):
-            self._load_icl_examples(entry.options.get(CONF_IN_CONTEXT_EXAMPLES_FILE, DEFAULT_IN_CONTEXT_EXAMPLES_FILE))
+        if entry.options.get(
+            CONF_USE_IN_CONTEXT_LEARNING_EXAMPLES,
+            DEFAULT_USE_IN_CONTEXT_LEARNING_EXAMPLES,
+        ):
+            self._load_icl_examples(
+                entry.options.get(
+                    CONF_IN_CONTEXT_EXAMPLES_FILE, DEFAULT_IN_CONTEXT_EXAMPLES_FILE
+                )
+            )
 
     async def async_added_to_hass(self) -> None:
+        # chatgpt said this line is not required anymore
         """When entity is added to Home Assistant."""
-        await super().async_added_to_hass()
-        assist_pipeline.async_migrate_engine(
-            self.hass, "conversation", self.entry.entry_id, self.entity_id
-        )
-        conversation.async_set_agent(self.hass, self.entry, self)
+        # await super().async_added_to_hass()
+        # assist_pipeline.async_migrate_engine(
+        #     self.hass, "conversation", self.entry.entry_id, self.entity_id
+        # )
+        # conversation.async_set_agent(self.hass, self.entry, self)
 
     async def async_will_remove_from_hass(self) -> None:
         """When entity will be removed from Home Assistant."""
@@ -245,14 +292,22 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
             with open(icl_filename, encoding="utf-8-sig") as f:
                 self.in_context_examples = list(csv.DictReader(f))
 
-                if set(self.in_context_examples[0].keys()) != set(["type", "request", "tool", "response" ]):
-                    raise Exception("ICL csv file did not have 2 columns: service & response")
+                if set(self.in_context_examples[0].keys()) != set(
+                    ["type", "request", "tool", "response"]
+                ):
+                    raise Exception(
+                        "ICL csv file did not have 2 columns: service & response"
+                    )
 
             if len(self.in_context_examples) == 0:
-                _LOGGER.warning(f"There were no in context learning examples found in the file '{filename}'!")
+                _LOGGER.warning(
+                    f"There were no in context learning examples found in the file '{filename}'!"
+                )
                 self.in_context_examples = None
             else:
-                _LOGGER.debug(f"Loaded {len(self.in_context_examples)} examples for ICL")
+                _LOGGER.debug(
+                    f"Loaded {len(self.in_context_examples)} examples for ICL"
+                )
         except Exception:
             _LOGGER.exception("Failed to load in context learning examples!")
             self.in_context_examples = None
@@ -263,8 +318,15 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                 conversation.ConversationEntityFeature.CONTROL
             )
 
-        if self.entry.options.get(CONF_USE_IN_CONTEXT_LEARNING_EXAMPLES, DEFAULT_USE_IN_CONTEXT_LEARNING_EXAMPLES):
-            self._load_icl_examples(self.entry.options.get(CONF_IN_CONTEXT_EXAMPLES_FILE, DEFAULT_IN_CONTEXT_EXAMPLES_FILE))
+        if self.entry.options.get(
+            CONF_USE_IN_CONTEXT_LEARNING_EXAMPLES,
+            DEFAULT_USE_IN_CONTEXT_LEARNING_EXAMPLES,
+        ):
+            self._load_icl_examples(
+                self.entry.options.get(
+                    CONF_IN_CONTEXT_EXAMPLES_FILE, DEFAULT_IN_CONTEXT_EXAMPLES_FILE
+                )
+            )
         else:
             self.in_context_examples = None
 
@@ -286,9 +348,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
 
     async def _async_load_model(self, entry: ConfigEntry) -> str:
         """Default implementation is to call _load_model() which probably does blocking stuff"""
-        return await self.hass.async_add_executor_job(
-            self._load_model, entry
-        )
+        return await self.hass.async_add_executor_job(self._load_model, entry)
 
     def _generate(self, conversation: dict) -> str:
         """Call the backend to generate a response from the conversation. Implemented by sub-classes"""
@@ -296,16 +356,18 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
 
     async def _async_generate(self, conversation: dict) -> str:
         """Default implementation is to call _generate() which probably does blocking stuff"""
-        return await self.hass.async_add_executor_job(
-            self._generate, conversation
-        )
+        return await self.hass.async_add_executor_job(self._generate, conversation)
 
     def _warn_context_size(self):
         num_entities = len(self._async_get_exposed_entities()[0])
-        context_size = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
-        _LOGGER.error("There were too many entities exposed when attempting to generate a response for " +
-                      f"{self.entry.data[CONF_CHAT_MODEL]} and it exceeded the context size for the model. " +
-                      f"Please reduce the number of entities exposed ({num_entities}) or increase the model's context size ({int(context_size)})")
+        context_size = self.entry.options.get(
+            CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+        )
+        _LOGGER.error(
+            "There were too many entities exposed when attempting to generate a response for "
+            + f"{self.entry.data[CONF_CHAT_MODEL]} and it exceeded the context size for the model. "
+            + f"Please reduce the number of entities exposed ({num_entities}) or increase the model's context size ({int(context_size)})"
+        )
 
     async def async_process(self, user_input: ConversationInput) -> ConversationResult:
         """Process a sentence."""
@@ -322,14 +384,23 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
         user_input: conversation.ConversationInput,
         chat_log: conversation.ChatLog,
     ) -> conversation.ConversationResult:
-
         raw_prompt = self.entry.options.get(CONF_PROMPT, DEFAULT_PROMPT)
-        prompt_template = self.entry.options.get(CONF_PROMPT_TEMPLATE, DEFAULT_PROMPT_TEMPLATE)
+        prompt_template = self.entry.options.get(
+            CONF_PROMPT_TEMPLATE, DEFAULT_PROMPT_TEMPLATE
+        )
         template_desc = PROMPT_TEMPLATE_DESCRIPTIONS[prompt_template]
-        refresh_system_prompt = self.entry.options.get(CONF_REFRESH_SYSTEM_PROMPT, DEFAULT_REFRESH_SYSTEM_PROMPT)
-        remember_conversation = self.entry.options.get(CONF_REMEMBER_CONVERSATION, DEFAULT_REMEMBER_CONVERSATION)
-        remember_num_interactions = self.entry.options.get(CONF_REMEMBER_NUM_INTERACTIONS, DEFAULT_REMEMBER_NUM_INTERACTIONS)
-        service_call_regex = self.entry.options.get(CONF_SERVICE_CALL_REGEX, DEFAULT_SERVICE_CALL_REGEX)
+        refresh_system_prompt = self.entry.options.get(
+            CONF_REFRESH_SYSTEM_PROMPT, DEFAULT_REFRESH_SYSTEM_PROMPT
+        )
+        remember_conversation = self.entry.options.get(
+            CONF_REMEMBER_CONVERSATION, DEFAULT_REMEMBER_CONVERSATION
+        )
+        remember_num_interactions = self.entry.options.get(
+            CONF_REMEMBER_NUM_INTERACTIONS, DEFAULT_REMEMBER_NUM_INTERACTIONS
+        )
+        service_call_regex = self.entry.options.get(
+            CONF_SERVICE_CALL_REGEX, DEFAULT_SERVICE_CALL_REGEX
+        )
 
         try:
             service_call_pattern = re.compile(service_call_regex, flags=re.MULTILINE)
@@ -358,7 +429,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                         language=user_input.language,
                         assistant=conversation.DOMAIN,
                         device_id=user_input.device_id,
-                    )
+                    ),
                 )
             except HomeAssistantError as err:
                 _LOGGER.error("Error getting LLM API: %s", err)
@@ -371,7 +442,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                     response=intent_response, conversation_id=user_input.conversation_id
                 )
 
-        message_history = [ _convert_content(content) for content in chat_log.content ]
+        message_history = [_convert_content(content) for content in chat_log.content]
 
         # re-generate prompt if necessary
         if len(message_history) == 0 or refresh_system_prompt:
@@ -388,7 +459,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                     response=intent_response, conversation_id=user_input.conversation_id
                 )
 
-            system_prompt = { "role": "system", "message": message }
+            system_prompt = {"role": "system", "message": message}
 
             if len(message_history) == 0:
                 message_history.append(system_prompt)
@@ -399,6 +470,14 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
         try:
             _LOGGER.debug(message_history)
             response = await self._async_generate(message_history)
+            # ---------- debug block start ----------
+            import debugpy
+
+            debugpy.listen(("0.0.0.0", 5678))
+            print("🧠 Waiting for debugger attach...")
+            debugpy.wait_for_client()
+            debugpy.breakpoint()
+            # ---------- debug block end ----------
             _LOGGER.debug(response)
 
         except Exception as err:
@@ -417,14 +496,25 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
         response = response.replace(template_desc["assistant"]["suffix"], "")
 
         # remove think blocks
-        response = re.sub(rf"^.*?{template_desc["chain_of_thought"]["suffix"]}", "", response, flags=re.DOTALL)
+        response = re.sub(
+            rf"^.*?{template_desc['chain_of_thought']['suffix']}",
+            "",
+            response,
+            flags=re.DOTALL,
+        )
 
         message_history.append({"role": "assistant", "message": response})
         if remember_conversation:
-            if remember_num_interactions and len(message_history) > (remember_num_interactions * 2) + 1:
-                for i in range(0,2):
+            if (
+                remember_num_interactions
+                and len(message_history) > (remember_num_interactions * 2) + 1
+            ):
+                for i in range(0, 2):
                     message_history.pop(1)
-            chat_log.content = [_convert_content_back(user_input.agent_id, message_history_entry) for message_history_entry in message_history ]
+            chat_log.content = [
+                _convert_content_back(user_input.agent_id, message_history_entry)
+                for message_history_entry in message_history
+            ]
 
         if llm_api is None:
             # return the output without messing with it if there is no API exposed to the model
@@ -442,29 +532,35 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
             parsed_tool_call: dict = json.loads(block)
 
             if llm_api.api.id == HOME_LLM_API_ID:
-                schema_to_validate = vol.Schema({
-                    vol.Required('service'): str,
-                    vol.Required('target_device'): str,
-                    vol.Optional('rgb_color'): str,
-                    vol.Optional('brightness'): vol.Coerce(float),
-                    vol.Optional('temperature'): vol.Coerce(float),
-                    vol.Optional('humidity'): vol.Coerce(float),
-                    vol.Optional('fan_mode'): str,
-                    vol.Optional('hvac_mode'): str,
-                    vol.Optional('preset_mode'): str,
-                    vol.Optional('duration'): str,
-                    vol.Optional('item'): str,
-                })
+                schema_to_validate = vol.Schema(
+                    {
+                        vol.Required("service"): str,
+                        vol.Required("target_device"): str,
+                        vol.Optional("rgb_color"): str,
+                        vol.Optional("brightness"): vol.Coerce(float),
+                        vol.Optional("temperature"): vol.Coerce(float),
+                        vol.Optional("humidity"): vol.Coerce(float),
+                        vol.Optional("fan_mode"): str,
+                        vol.Optional("hvac_mode"): str,
+                        vol.Optional("preset_mode"): str,
+                        vol.Optional("duration"): str,
+                        vol.Optional("item"): str,
+                    }
+                )
             else:
-                schema_to_validate = vol.Schema({
-                    vol.Required("name"): str,
-                    vol.Required("arguments"): dict,
-                })
+                schema_to_validate = vol.Schema(
+                    {
+                        vol.Required("name"): str,
+                        vol.Required("arguments"): dict,
+                    }
+                )
 
             try:
                 schema_to_validate(parsed_tool_call)
             except vol.Error as ex:
-                _LOGGER.info(f"LLM produced an improperly formatted response: {repr(ex)}")
+                _LOGGER.info(
+                    f"LLM produced an improperly formatted response: {repr(ex)}"
+                )
 
                 intent_response = intent.IntentResponse(language=user_input.language)
                 intent_response.async_set_error(
@@ -478,7 +574,11 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
             _LOGGER.info(f"calling tool: {block}")
 
             # try to fix certain arguments
-            args_dict = parsed_tool_call if llm_api.api.id == HOME_LLM_API_ID else parsed_tool_call["arguments"]
+            args_dict = (
+                parsed_tool_call
+                if llm_api.api.id == HOME_LLM_API_ID
+                else parsed_tool_call["arguments"]
+            )
 
             # make sure brightness is 0-255 and not a percentage
             if "brightness" in args_dict and 0.0 < args_dict["brightness"] <= 1.0:
@@ -486,7 +586,9 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
 
             # convert string "tuple" to a list for RGB colors
             if "rgb_color" in args_dict and isinstance(args_dict["rgb_color"], str):
-                args_dict["rgb_color"] = [ int(x) for x in args_dict["rgb_color"][1:-1].split(",") ]
+                args_dict["rgb_color"] = [
+                    int(x) for x in args_dict["rgb_color"][1:-1].split(",")
+                ]
 
             if llm_api.api.id == HOME_LLM_API_ID:
                 to_say = to_say + parsed_tool_call.pop("to_say", "")
@@ -520,11 +622,20 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                 )
 
         # handle models that generate a function call and wait for the result before providing a response
-        if self.entry.options.get(CONF_TOOL_MULTI_TURN_CHAT, DEFAULT_TOOL_MULTI_TURN_CHAT) and tool_response is not None:
+        if (
+            self.entry.options.get(
+                CONF_TOOL_MULTI_TURN_CHAT, DEFAULT_TOOL_MULTI_TURN_CHAT
+            )
+            and tool_response is not None
+        ):
             try:
-                message_history.append({"role": "tool", "message": json.dumps(tool_response)})
+                message_history.append(
+                    {"role": "tool", "message": json.dumps(tool_response)}
+                )
             except:
-                message_history.append({"role": "tool", "message": "No tools were used in this response."})
+                message_history.append(
+                    {"role": "tool", "message": "No tools were used in this response."}
+                )
 
             # generate a response based on the tool result
             try:
@@ -579,7 +690,9 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                     attributes["aliases"] = entity.aliases
 
                 if entity.unit_of_measurement:
-                    attributes["state"] = attributes["state"] + " " + entity.unit_of_measurement
+                    attributes["state"] = (
+                        attributes["state"] + " " + entity.unit_of_measurement
+                    )
 
             # area could be on device or entity. prefer device area
             area_id = None
@@ -632,7 +745,8 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
             return result
 
         raw_parameters: list = voluptuous_serialize.convert(
-            parameters, custom_serializer=custom_custom_serializer)
+            parameters, custom_serializer=custom_custom_serializer
+        )
 
         # handle vol.Any in the key side of things
         processed_parameters = []
@@ -656,8 +770,8 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                     },
                     "required": [
                         x["name"] for x in processed_parameters if x.get("required")
-                    ]
-                }
+                    ],
+                },
             }
         elif style == TOOL_FORMAT_FULL:
             return {
@@ -671,13 +785,14 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                             x["name"]: {
                                 "type": x.get("type", "string"),
                                 "description": x.get("description", ""),
-                            } for x in processed_parameters
+                            }
+                            for x in processed_parameters
                         },
                         "required": [
                             x["name"] for x in processed_parameters if x.get("required")
-                        ]
-                    }
-                }
+                        ],
+                    },
+                },
             }
 
         raise Exception(f"Unknown tool format {style}")
@@ -690,8 +805,7 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
         all_areas = list(area_registry.async_list_areas())
 
         in_context_examples = [
-            x for x in self.in_context_examples
-            if x["type"] in entity_domains
+            x for x in self.in_context_examples if x["type"] in entity_domains
         ]
 
         random.shuffle(in_context_examples)
@@ -699,7 +813,9 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
 
         num_examples_to_generate = min(num_examples, len(in_context_examples))
         if num_examples_to_generate < num_examples:
-            _LOGGER.warning(f"Attempted to generate {num_examples} ICL examples for conversation, but only {len(in_context_examples)} are available!")
+            _LOGGER.warning(
+                f"Attempted to generate {num_examples} ICL examples for conversation, but only {len(in_context_examples)} are available!"
+            )
 
         examples = []
         for _ in range(num_examples_to_generate):
@@ -707,7 +823,11 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
             request = chosen_example["request"]
             response = chosen_example["response"]
 
-            random_device = [ x for x in entity_names if x.split(".")[0] == chosen_example["type"] ][0]
+            random_device = [
+                x for x in entity_names if x.split(".")[0] == chosen_example["type"]
+            ][0]
+            if not all_areas:
+                return []  # or raise, or fallback to defaults
             random_area = random.choice(all_areas).name
             random_brightness = round(random.random(), 2)
             random_color = random.choice(list(color.COLORS.keys()))
@@ -734,23 +854,28 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                 response = response.replace("<color>", random_color)
                 tool_arguments["color"] = random_color
 
-            examples.append({
-                "request": request,
-                "response": response,
-                "tool": {
-                    "name": chosen_example["tool"],
-                    "arguments": tool_arguments
+            examples.append(
+                {
+                    "request": request,
+                    "response": response,
+                    "tool": {
+                        "name": chosen_example["tool"],
+                        "arguments": tool_arguments,
+                    },
                 }
-            })
+            )
 
         return examples
 
-    def _generate_system_prompt(self, prompt_template: str, llm_api: llm.APIInstance | None) -> str:
+    def _generate_system_prompt(
+        self, prompt_template: str, llm_api: llm.APIInstance | None
+    ) -> str:
         """Generate the system prompt with current entity states"""
         entities_to_expose, domains = self._async_get_exposed_entities()
 
-        extra_attributes_to_expose = self.entry.options \
-            .get(CONF_EXTRA_ATTRIBUTES_TO_EXPOSE, DEFAULT_EXTRA_ATTRIBUTES_TO_EXPOSE)
+        extra_attributes_to_expose = self.entry.options.get(
+            CONF_EXTRA_ATTRIBUTES_TO_EXPOSE, DEFAULT_EXTRA_ATTRIBUTES_TO_EXPOSE
+        )
 
         def expose_attributes(attributes) -> list[str]:
             result = []
@@ -769,13 +894,13 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                     elif attribute_name == "temperature":
                         # try to get unit or guess otherwise
                         suffix = "F" if value > 50 else "C"
-                        value = F"{int(value)} {suffix}"
+                        value = f"{int(value)} {suffix}"
                     elif attribute_name == "rgb_color":
-                        value = F"{closest_color(value)} {value}"
+                        value = f"{closest_color(value)} {value}"
                     elif attribute_name == "volume_level":
-                        value = f"vol={int(value*100)}"
+                        value = f"vol={int(value * 100)}"
                     elif attribute_name == "brightness":
-                        value = f"{int(value/255*100)}%"
+                        value = f"{int(value / 255 * 100)}%"
                     elif attribute_name == "humidity":
                         value = f"{value}%"
 
@@ -791,28 +916,37 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
             exposed_attributes = expose_attributes(attributes)
             str_attributes = ";".join([state] + exposed_attributes)
 
-            formatted_devices = formatted_devices + f"{name} '{attributes.get('friendly_name')}' = {str_attributes}\n"
-            devices.append({
-                "entity_id": name,
-                "name": attributes.get('friendly_name'),
-                "state": state,
-                "attributes": exposed_attributes,
-                "area_name": attributes.get("area_name"),
-                "area_id": attributes.get("area_id"),
-                "is_alias": False
-            })
+            formatted_devices = (
+                formatted_devices
+                + f"{name} '{attributes.get('friendly_name')}' = {str_attributes}\n"
+            )
+            devices.append(
+                {
+                    "entity_id": name,
+                    "name": attributes.get("friendly_name"),
+                    "state": state,
+                    "attributes": exposed_attributes,
+                    "area_name": attributes.get("area_name"),
+                    "area_id": attributes.get("area_id"),
+                    "is_alias": False,
+                }
+            )
             if "aliases" in attributes:
                 for alias in attributes["aliases"]:
-                    formatted_devices = formatted_devices + f"{name} '{alias}' = {str_attributes}\n"
-                    devices.append({
-                        "entity_id": name,
-                        "name": alias,
-                        "state": state,
-                        "attributes": exposed_attributes,
-                        "area_name": attributes.get("area_name"),
-                        "area_id": attributes.get("area_id"),
-                        "is_alias": True
-                    })
+                    formatted_devices = (
+                        formatted_devices + f"{name} '{alias}' = {str_attributes}\n"
+                    )
+                    devices.append(
+                        {
+                            "entity_id": name,
+                            "name": alias,
+                            "state": state,
+                            "attributes": exposed_attributes,
+                            "area_name": attributes.get("area_name"),
+                            "area_id": attributes.get("area_id"),
+                            "is_alias": True,
+                        }
+                    )
 
         if llm_api:
             if llm_api.api.id == HOME_LLM_API_ID:
@@ -825,12 +959,14 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
 
                     # scripts show up as individual services
                     if domain == "script" and not scripts_added:
-                        all_services.extend([
-                            ("script.reload", vol.Schema({}), ""),
-                            ("script.turn_on", vol.Schema({}), ""),
-                            ("script.turn_off", vol.Schema({}), ""),
-                            ("script.toggle", vol.Schema({}), ""),
-                        ])
+                        all_services.extend(
+                            [
+                                ("script.reload", vol.Schema({}), ""),
+                                ("script.turn_on", vol.Schema({}), ""),
+                                ("script.turn_off", vol.Schema({}), ""),
+                                ("script.toggle", vol.Schema({}), ""),
+                            ]
+                        )
                         scripts_added = True
                         continue
 
@@ -839,17 +975,16 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                             continue
 
                         args = flatten_vol_schema(service.schema)
-                        args_to_expose = set(args).intersection(ALLOWED_SERVICE_CALL_ARGUMENTS)
-                        service_schema = vol.Schema({
-                            vol.Optional(arg): str for arg in args_to_expose
-                        })
+                        args_to_expose = set(args).intersection(
+                            ALLOWED_SERVICE_CALL_ARGUMENTS
+                        )
+                        service_schema = vol.Schema(
+                            {vol.Optional(arg): str for arg in args_to_expose}
+                        )
 
                         all_services.append((f"{domain}.{name}", service_schema, ""))
 
-                tools = [
-                    self._format_tool(*tool)
-                    for tool in all_services
-                ]
+                tools = [self._format_tool(*tool) for tool in all_services]
 
             else:
                 tools = [
@@ -857,12 +992,17 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
                     for tool in llm_api.tools
                 ]
 
-            if  self.entry.options.get(CONF_TOOL_FORMAT, DEFAULT_TOOL_FORMAT) == TOOL_FORMAT_MINIMAL:
+            if (
+                self.entry.options.get(CONF_TOOL_FORMAT, DEFAULT_TOOL_FORMAT)
+                == TOOL_FORMAT_MINIMAL
+            ):
                 formatted_tools = ", ".join(tools)
             else:
                 formatted_tools = json.dumps(tools)
         else:
-            tools = ["No tools were provided. If the user requests you interact with a device, tell them you are unable to do so."]
+            tools = [
+                "No tools were provided. If the user requests you interact with a device, tell them you are unable to do so."
+            ]
             formatted_tools = tools[0]
 
         render_variables = {
@@ -870,18 +1010,25 @@ class LocalLLMAgent(ConversationEntity, AbstractConversationAgent):
             "formatted_devices": formatted_devices,
             "tools": tools,
             "formatted_tools": formatted_tools,
-            "response_examples": []
+            "response_examples": [],
         }
 
         # only pass examples if there are loaded examples + an API was exposed
         if self.in_context_examples and llm_api:
-            num_examples = int(self.entry.options.get(CONF_NUM_IN_CONTEXT_EXAMPLES, DEFAULT_NUM_IN_CONTEXT_EXAMPLES))
-            render_variables["response_examples"] = self._generate_icl_examples(num_examples, list(entities_to_expose.keys()))
+            num_examples = int(
+                self.entry.options.get(
+                    CONF_NUM_IN_CONTEXT_EXAMPLES, DEFAULT_NUM_IN_CONTEXT_EXAMPLES
+                )
+            )
+            render_variables["response_examples"] = self._generate_icl_examples(
+                num_examples, list(entities_to_expose.keys())
+            )
 
         return template.Template(prompt_template, self.hass).async_render(
             render_variables,
             parse_result=False,
         )
+
 
 class LlamaCppAgent(LocalLLMAgent):
     model_path: str
@@ -898,9 +1045,7 @@ class LlamaCppAgent(LocalLLMAgent):
     def _load_model(self, entry: ConfigEntry) -> None:
         self.model_path = entry.data.get(CONF_DOWNLOADED_MODEL_FILE)
 
-        _LOGGER.info(
-            "Using model file '%s'", self.model_path
-        )
+        _LOGGER.info("Using model file '%s'", self.model_path)
 
         if not self.model_path:
             raise Exception(f"Model was not found at '{self.model_path}'!")
@@ -914,7 +1059,9 @@ class LlamaCppAgent(LocalLLMAgent):
             # attempt to re-install llama-cpp-python if it was uninstalled for some reason
             install_result = install_llama_cpp_python(self.hass.config.config_dir)
             if not install_result == True:
-                raise ConfigEntryError("llama-cpp-python was not installed on startup and re-installing it led to an error!")
+                raise ConfigEntryError(
+                    "llama-cpp-python was not installed on startup and re-installing it led to an error!"
+                )
 
             validate_llama_cpp_python_installation()
             self.llama_cpp_module = importlib.import_module("llama_cpp")
@@ -923,11 +1070,21 @@ class LlamaCppAgent(LocalLLMAgent):
 
         _LOGGER.debug(f"Loading model '{self.model_path}'...")
         self.loaded_model_settings = {}
-        self.loaded_model_settings[CONF_CONTEXT_LENGTH] = entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
-        self.loaded_model_settings[CONF_BATCH_SIZE] = entry.options.get(CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE)
-        self.loaded_model_settings[CONF_THREAD_COUNT] = entry.options.get(CONF_THREAD_COUNT, DEFAULT_THREAD_COUNT)
-        self.loaded_model_settings[CONF_BATCH_THREAD_COUNT] = entry.options.get(CONF_BATCH_THREAD_COUNT, DEFAULT_BATCH_THREAD_COUNT)
-        self.loaded_model_settings[CONF_ENABLE_FLASH_ATTENTION] = entry.options.get(CONF_ENABLE_FLASH_ATTENTION, DEFAULT_ENABLE_FLASH_ATTENTION)
+        self.loaded_model_settings[CONF_CONTEXT_LENGTH] = entry.options.get(
+            CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+        )
+        self.loaded_model_settings[CONF_BATCH_SIZE] = entry.options.get(
+            CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE
+        )
+        self.loaded_model_settings[CONF_THREAD_COUNT] = entry.options.get(
+            CONF_THREAD_COUNT, DEFAULT_THREAD_COUNT
+        )
+        self.loaded_model_settings[CONF_BATCH_THREAD_COUNT] = entry.options.get(
+            CONF_BATCH_THREAD_COUNT, DEFAULT_BATCH_THREAD_COUNT
+        )
+        self.loaded_model_settings[CONF_ENABLE_FLASH_ATTENTION] = entry.options.get(
+            CONF_ENABLE_FLASH_ATTENTION, DEFAULT_ENABLE_FLASH_ATTENTION
+        )
 
         self.llm = Llama(
             model_path=self.model_path,
@@ -941,8 +1098,9 @@ class LlamaCppAgent(LocalLLMAgent):
 
         self.grammar = None
         if entry.options.get(CONF_USE_GBNF_GRAMMAR, DEFAULT_USE_GBNF_GRAMMAR):
-            self._load_grammar(entry.options.get(CONF_GBNF_GRAMMAR_FILE, DEFAULT_GBNF_GRAMMAR_FILE))
-
+            self._load_grammar(
+                entry.options.get(CONF_GBNF_GRAMMAR_FILE, DEFAULT_GBNF_GRAMMAR_FILE)
+            )
 
         # TODO: check about disk caching
         # self.llm.set_cache(self.llama_cpp_module.LlamaDiskCache(
@@ -956,12 +1114,16 @@ class LlamaCppAgent(LocalLLMAgent):
         self.cache_refresh_after_cooldown = False
         self.model_lock = threading.Lock()
 
-        self.loaded_model_settings[CONF_PROMPT_CACHING_ENABLED] = entry.options.get(CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED)
+        self.loaded_model_settings[CONF_PROMPT_CACHING_ENABLED] = entry.options.get(
+            CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED
+        )
         if self.loaded_model_settings[CONF_PROMPT_CACHING_ENABLED]:
+
             @callback
             async def enable_caching_after_startup(_now) -> None:
                 self._set_prompt_caching(enabled=True)
                 await self._async_cache_prompt(None, None, None)
+
             async_call_later(self.hass, 5.0, enable_caching_after_startup)
 
     def _load_grammar(self, filename: str):
@@ -981,18 +1143,42 @@ class LlamaCppAgent(LocalLLMAgent):
         LocalLLMAgent._update_options(self)
 
         model_reloaded = False
-        if self.loaded_model_settings[CONF_CONTEXT_LENGTH] != self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH) or \
-            self.loaded_model_settings[CONF_BATCH_SIZE] != self.entry.options.get(CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE) or \
-            self.loaded_model_settings[CONF_THREAD_COUNT] != self.entry.options.get(CONF_THREAD_COUNT, DEFAULT_THREAD_COUNT) or \
-            self.loaded_model_settings[CONF_BATCH_THREAD_COUNT] != self.entry.options.get(CONF_BATCH_THREAD_COUNT, DEFAULT_BATCH_THREAD_COUNT) or \
-            self.loaded_model_settings[CONF_ENABLE_FLASH_ATTENTION] != self.entry.options.get(CONF_ENABLE_FLASH_ATTENTION, DEFAULT_ENABLE_FLASH_ATTENTION):
-
+        if (
+            self.loaded_model_settings[CONF_CONTEXT_LENGTH]
+            != self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
+            or self.loaded_model_settings[CONF_BATCH_SIZE]
+            != self.entry.options.get(CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE)
+            or self.loaded_model_settings[CONF_THREAD_COUNT]
+            != self.entry.options.get(CONF_THREAD_COUNT, DEFAULT_THREAD_COUNT)
+            or self.loaded_model_settings[CONF_BATCH_THREAD_COUNT]
+            != self.entry.options.get(
+                CONF_BATCH_THREAD_COUNT, DEFAULT_BATCH_THREAD_COUNT
+            )
+            or self.loaded_model_settings[CONF_ENABLE_FLASH_ATTENTION]
+            != self.entry.options.get(
+                CONF_ENABLE_FLASH_ATTENTION, DEFAULT_ENABLE_FLASH_ATTENTION
+            )
+        ):
             _LOGGER.debug(f"Reloading model '{self.model_path}'...")
-            self.loaded_model_settings[CONF_CONTEXT_LENGTH] = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
-            self.loaded_model_settings[CONF_BATCH_SIZE] = self.entry.options.get(CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE)
-            self.loaded_model_settings[CONF_THREAD_COUNT] = self.entry.options.get(CONF_THREAD_COUNT, DEFAULT_THREAD_COUNT)
-            self.loaded_model_settings[CONF_BATCH_THREAD_COUNT] = self.entry.options.get(CONF_BATCH_THREAD_COUNT, DEFAULT_BATCH_THREAD_COUNT)
-            self.loaded_model_settings[CONF_ENABLE_FLASH_ATTENTION] = self.entry.options.get(CONF_ENABLE_FLASH_ATTENTION, DEFAULT_ENABLE_FLASH_ATTENTION)
+            self.loaded_model_settings[CONF_CONTEXT_LENGTH] = self.entry.options.get(
+                CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+            )
+            self.loaded_model_settings[CONF_BATCH_SIZE] = self.entry.options.get(
+                CONF_BATCH_SIZE, DEFAULT_BATCH_SIZE
+            )
+            self.loaded_model_settings[CONF_THREAD_COUNT] = self.entry.options.get(
+                CONF_THREAD_COUNT, DEFAULT_THREAD_COUNT
+            )
+            self.loaded_model_settings[CONF_BATCH_THREAD_COUNT] = (
+                self.entry.options.get(
+                    CONF_BATCH_THREAD_COUNT, DEFAULT_BATCH_THREAD_COUNT
+                )
+            )
+            self.loaded_model_settings[CONF_ENABLE_FLASH_ATTENTION] = (
+                self.entry.options.get(
+                    CONF_ENABLE_FLASH_ATTENTION, DEFAULT_ENABLE_FLASH_ATTENTION
+                )
+            )
 
             Llama = getattr(self.llama_cpp_module, "Llama")
             self.llm = Llama(
@@ -1000,28 +1186,47 @@ class LlamaCppAgent(LocalLLMAgent):
                 n_ctx=int(self.loaded_model_settings[CONF_CONTEXT_LENGTH]),
                 n_batch=int(self.loaded_model_settings[CONF_BATCH_SIZE]),
                 n_threads=int(self.loaded_model_settings[CONF_THREAD_COUNT]),
-                n_threads_batch=int(self.loaded_model_settings[CONF_BATCH_THREAD_COUNT]),
+                n_threads_batch=int(
+                    self.loaded_model_settings[CONF_BATCH_THREAD_COUNT]
+                ),
                 flash_attn=self.loaded_model_settings[CONF_ENABLE_FLASH_ATTENTION],
             )
             _LOGGER.debug("Model loaded")
             model_reloaded = True
 
         if self.entry.options.get(CONF_USE_GBNF_GRAMMAR, DEFAULT_USE_GBNF_GRAMMAR):
-            current_grammar = self.entry.options.get(CONF_GBNF_GRAMMAR_FILE, DEFAULT_GBNF_GRAMMAR_FILE)
-            if not self.grammar or self.loaded_model_settings[CONF_GBNF_GRAMMAR_FILE] != current_grammar:
+            current_grammar = self.entry.options.get(
+                CONF_GBNF_GRAMMAR_FILE, DEFAULT_GBNF_GRAMMAR_FILE
+            )
+            if (
+                not self.grammar
+                or self.loaded_model_settings[CONF_GBNF_GRAMMAR_FILE] != current_grammar
+            ):
                 self._load_grammar(current_grammar)
         else:
             self.grammar = None
 
-        if self.entry.options.get(CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED):
+        if self.entry.options.get(
+            CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED
+        ):
             self._set_prompt_caching(enabled=True)
 
-            if self.loaded_model_settings[CONF_PROMPT_CACHING_ENABLED] != self.entry.options.get(CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED) or \
-                model_reloaded:
-                self.loaded_model_settings[CONF_PROMPT_CACHING_ENABLED] = self.entry.options.get(CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED)
+            if (
+                self.loaded_model_settings[CONF_PROMPT_CACHING_ENABLED]
+                != self.entry.options.get(
+                    CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED
+                )
+                or model_reloaded
+            ):
+                self.loaded_model_settings[CONF_PROMPT_CACHING_ENABLED] = (
+                    self.entry.options.get(
+                        CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED
+                    )
+                )
 
                 async def cache_current_prompt(_now):
                     await self._async_cache_prompt(None, None, None)
+
                 async_call_later(self.hass, 1.0, cache_current_prompt)
         else:
             self._set_prompt_caching(enabled=False)
@@ -1031,19 +1236,21 @@ class LlamaCppAgent(LocalLLMAgent):
         entities, domains = LocalLLMAgent._async_get_exposed_entities(self)
 
         # ignore sorting if prompt caching is disabled
-        if not self.entry.options.get(CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED):
+        if not self.entry.options.get(
+            CONF_PROMPT_CACHING_ENABLED, DEFAULT_PROMPT_CACHING_ENABLED
+        ):
             return entities, domains
 
-        entity_order = { name: None for name in entities.keys() }
+        entity_order = {name: None for name in entities.keys()}
         entity_order.update(self.last_updated_entities)
 
         def sort_key(item):
             item_name, last_updated = item
             # Handle cases where last updated is None
             if last_updated is None:
-                return (False, '', item_name)
+                return (False, "", item_name)
             else:
-                return (True, last_updated, '')
+                return (True, last_updated, "")
 
         # Sort the items based on the sort_key function
         sorted_items = sorted(list(entity_order.items()), key=sort_key)
@@ -1061,13 +1268,16 @@ class LlamaCppAgent(LocalLLMAgent):
             _LOGGER.info("enabling prompt caching...")
 
             entity_ids = [
-                state.entity_id for state in self.hass.states.async_all() \
-                    if async_should_expose(self.hass, CONVERSATION_DOMAIN, state.entity_id)
+                state.entity_id
+                for state in self.hass.states.async_all()
+                if async_should_expose(self.hass, CONVERSATION_DOMAIN, state.entity_id)
             ]
 
             _LOGGER.debug(f"watching entities: {entity_ids}")
 
-            self.remove_prompt_caching_listener = async_track_state_change(self.hass, entity_ids, self._async_cache_prompt)
+            self.remove_prompt_caching_listener = async_track_state_change(
+                self.hass, entity_ids, self._async_cache_prompt
+            )
 
         elif not enabled and self.remove_prompt_caching_listener:
             _LOGGER.info("disabling prompt caching...")
@@ -1104,8 +1314,13 @@ class LlamaCppAgent(LocalLLMAgent):
 
         # if we are inside the cooldown period, request a refresh and exit
         current_time = time.time()
-        fastest_prime_interval = self.entry.options.get(CONF_PROMPT_CACHING_INTERVAL, DEFAULT_PROMPT_CACHING_INTERVAL)
-        if self.last_cache_prime and current_time - self.last_cache_prime < fastest_prime_interval:
+        fastest_prime_interval = self.entry.options.get(
+            CONF_PROMPT_CACHING_INTERVAL, DEFAULT_PROMPT_CACHING_INTERVAL
+        )
+        if (
+            self.last_cache_prime
+            and current_time - self.last_cache_prime < fastest_prime_interval
+        ):
             self.cache_refresh_after_cooldown = True
             return
 
@@ -1117,37 +1332,48 @@ class LlamaCppAgent(LocalLLMAgent):
 
         try:
             raw_prompt = self.entry.options.get(CONF_PROMPT, DEFAULT_PROMPT)
-            prompt = self._format_prompt([
-                { "role": "system", "message": self._generate_system_prompt(raw_prompt, llm_api)},
-                { "role": "user", "message": "" }
-            ], include_generation_prompt=False)
-
-            input_tokens = self.llm.tokenize(
-                prompt.encode(), add_bos=False
+            prompt = self._format_prompt(
+                [
+                    {
+                        "role": "system",
+                        "message": self._generate_system_prompt(raw_prompt, llm_api),
+                    },
+                    {"role": "user", "message": ""},
+                ],
+                include_generation_prompt=False,
             )
+
+            input_tokens = self.llm.tokenize(prompt.encode(), add_bos=False)
 
             temperature = self.entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
             top_k = int(self.entry.options.get(CONF_TOP_K, DEFAULT_TOP_K))
             top_p = self.entry.options.get(CONF_TOP_P, DEFAULT_TOP_P)
-            grammar = self.grammar if self.entry.options.get(CONF_USE_GBNF_GRAMMAR, DEFAULT_USE_GBNF_GRAMMAR) else None
+            grammar = (
+                self.grammar
+                if self.entry.options.get(
+                    CONF_USE_GBNF_GRAMMAR, DEFAULT_USE_GBNF_GRAMMAR
+                )
+                else None
+            )
 
             _LOGGER.debug(f"Options: {self.entry.options}")
 
             _LOGGER.debug(f"Processing {len(input_tokens)} input tokens...")
 
             # grab just one token. should prime the kv cache with the system prompt
-            next(self.llm.generate(
-                input_tokens,
-                temp=temperature,
-                top_k=top_k,
-                top_p=top_p,
-                grammar=grammar
-            ))
+            next(
+                self.llm.generate(
+                    input_tokens,
+                    temp=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                    grammar=grammar,
+                )
+            )
 
             self.last_cache_prime = time.time()
         finally:
             self.model_lock.release()
-
 
         # schedule a refresh using async_call_later
         # if the flag is set after the delay then we do another refresh
@@ -1162,11 +1388,14 @@ class LlamaCppAgent(LocalLLMAgent):
                 await self.hass.async_add_executor_job(self._cache_prompt)
 
                 refresh_end = time.time()
-                _LOGGER.debug(f"cache refresh took {(refresh_end - refresh_start):.2f} sec")
+                _LOGGER.debug(
+                    f"cache refresh took {(refresh_end - refresh_start):.2f} sec"
+                )
 
-        refresh_delay = self.entry.options.get(CONF_PROMPT_CACHING_INTERVAL, DEFAULT_PROMPT_CACHING_INTERVAL)
+        refresh_delay = self.entry.options.get(
+            CONF_PROMPT_CACHING_INTERVAL, DEFAULT_PROMPT_CACHING_INTERVAL
+        )
         async_call_later(self.hass, float(refresh_delay), refresh_if_requested)
-
 
     def _generate(self, conversation: dict) -> str:
         prompt = self._format_prompt(conversation)
@@ -1181,16 +1410,20 @@ class LlamaCppAgent(LocalLLMAgent):
         _LOGGER.debug(f"Options: {self.entry.options}")
 
         with self.model_lock:
-            input_tokens = self.llm.tokenize(
-                prompt.encode(), add_bos=False
-            )
+            input_tokens = self.llm.tokenize(prompt.encode(), add_bos=False)
 
-            context_len = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
+            context_len = self.entry.options.get(
+                CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+            )
             if len(input_tokens) >= context_len:
                 num_entities = len(self._async_get_exposed_entities()[0])
-                context_size = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
+                context_size = self.entry.options.get(
+                    CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+                )
                 self._warn_context_size()
-                raise Exception(f"The model failed to produce a result because too many devices are exposed ({num_entities} devices) for the context size ({context_size} tokens)!")
+                raise Exception(
+                    f"The model failed to produce a result because too many devices are exposed ({num_entities} devices) for the context size ({context_size} tokens)!"
+                )
             if len(input_tokens) + max_tokens >= context_len:
                 self._warn_context_size()
 
@@ -1202,7 +1435,7 @@ class LlamaCppAgent(LocalLLMAgent):
                 top_p=top_p,
                 min_p=min_p,
                 typical_p=typical_p,
-                grammar=self.grammar
+                grammar=self.grammar,
             )
 
             result_tokens = []
@@ -1219,6 +1452,7 @@ class LlamaCppAgent(LocalLLMAgent):
 
         return result
 
+
 class BaseOpenAICompatibleAPIAgent(LocalLLMAgent):
     api_host: str
     api_key: str
@@ -1229,13 +1463,15 @@ class BaseOpenAICompatibleAPIAgent(LocalLLMAgent):
             hostname=entry.data[CONF_HOST],
             port=entry.data[CONF_PORT],
             ssl=entry.data[CONF_SSL],
-            path=""
+            path="",
         )
 
         self.api_key = entry.data.get(CONF_OPENAI_API_KEY)
         self.model_name = entry.data.get(CONF_CHAT_MODEL)
 
-    async def _async_generate_with_parameters(self, conversation: dict, endpoint: str, additional_params: dict) -> str:
+    async def _async_generate_with_parameters(
+        self, conversation: dict, endpoint: str, additional_params: dict
+    ) -> str:
         """Generate a response using the OpenAI-compatible API"""
 
         max_tokens = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
@@ -1263,7 +1499,7 @@ class BaseOpenAICompatibleAPIAgent(LocalLLMAgent):
                 f"{self.api_host}{endpoint}",
                 json=request_params,
                 timeout=timeout,
-                headers=headers
+                headers=headers,
             ) as response:
                 response.raise_for_status()
                 result = await response.json()
@@ -1282,21 +1518,28 @@ class BaseOpenAICompatibleAPIAgent(LocalLLMAgent):
     def _extract_response(self, response_json: dict) -> str:
         raise NotImplementedError("Subclasses must implement _extract_response()")
 
+
 class GenericOpenAIAPIAgent(BaseOpenAICompatibleAPIAgent):
     """Implements the OpenAPI-compatible text completion and chat completion API backends."""
 
     def _chat_completion_params(self, conversation: dict) -> (str, dict):
         request_params = {}
-        api_base_path = self.entry.data.get(CONF_GENERIC_OPENAI_PATH, DEFAULT_GENERIC_OPENAI_PATH)
+        api_base_path = self.entry.data.get(
+            CONF_GENERIC_OPENAI_PATH, DEFAULT_GENERIC_OPENAI_PATH
+        )
 
         endpoint = f"/{api_base_path}/chat/completions"
-        request_params["messages"] = [ { "role": x["role"], "content": x["message"] } for x in conversation ]
+        request_params["messages"] = [
+            {"role": x["role"], "content": x["message"]} for x in conversation
+        ]
 
         return endpoint, request_params
 
     def _completion_params(self, conversation: dict) -> (str, dict):
         request_params = {}
-        api_base_path = self.entry.data.get(CONF_GENERIC_OPENAI_PATH, DEFAULT_GENERIC_OPENAI_PATH)
+        api_base_path = self.entry.data.get(
+            CONF_GENERIC_OPENAI_PATH, DEFAULT_GENERIC_OPENAI_PATH
+        )
 
         endpoint = f"/{api_base_path}/completions"
         request_params["prompt"] = self._format_prompt(conversation)
@@ -1306,7 +1549,9 @@ class GenericOpenAIAPIAgent(BaseOpenAICompatibleAPIAgent):
     def _extract_response(self, response_json: dict) -> str:
         choices = response_json["choices"]
         if choices[0]["finish_reason"] != "stop":
-            _LOGGER.warning("Model response did not end on a stop token (unfinished sentence)")
+            _LOGGER.warning(
+                "Model response did not end on a stop token (unfinished sentence)"
+            )
 
         if response_json["object"] in ["chat.completion", "chat.completion.chunk"]:
             return choices[0]["message"]["content"]
@@ -1314,16 +1559,21 @@ class GenericOpenAIAPIAgent(BaseOpenAICompatibleAPIAgent):
             return choices[0]["text"]
 
     async def _async_generate(self, conversation: dict) -> str:
-        use_chat_api = self.entry.options.get(CONF_REMOTE_USE_CHAT_ENDPOINT, DEFAULT_REMOTE_USE_CHAT_ENDPOINT)
+        use_chat_api = self.entry.options.get(
+            CONF_REMOTE_USE_CHAT_ENDPOINT, DEFAULT_REMOTE_USE_CHAT_ENDPOINT
+        )
 
         if use_chat_api:
             endpoint, additional_params = self._chat_completion_params(conversation)
         else:
             endpoint, additional_params = self._completion_params(conversation)
 
-        result = await self._async_generate_with_parameters(conversation, endpoint, additional_params)
+        result = await self._async_generate_with_parameters(
+            conversation, endpoint, additional_params
+        )
 
         return result
+
 
 class GenericOpenAIResponsesAPIAgent(BaseOpenAICompatibleAPIAgent):
     """Implements the OpenAPI-compatible Responses API backend."""
@@ -1333,22 +1583,39 @@ class GenericOpenAIResponsesAPIAgent(BaseOpenAICompatibleAPIAgent):
 
     def _responses_params(self, conversation: dict) -> (str, dict):
         request_params = {}
-        api_base_path = self.entry.data.get(CONF_GENERIC_OPENAI_PATH, DEFAULT_GENERIC_OPENAI_PATH)
+        api_base_path = self.entry.data.get(
+            CONF_GENERIC_OPENAI_PATH, DEFAULT_GENERIC_OPENAI_PATH
+        )
 
         endpoint = f"/{api_base_path}/responses"
-        request_params["input"] = conversation[-1]["message"] # last message in the conversation is the user input
+        request_params["input"] = conversation[-1][
+            "message"
+        ]  # last message in the conversation is the user input
 
         # Assign previous_response_id if relevant
-        if self._last_response_id and self.entry.options.get(CONF_REMEMBER_CONVERSATION, DEFAULT_REMEMBER_CONVERSATION):
+        if self._last_response_id and self.entry.options.get(
+            CONF_REMEMBER_CONVERSATION, DEFAULT_REMEMBER_CONVERSATION
+        ):
             # If the last response was generated recently, use it as a context
-            configured_memory_time: datetime.timedelta = datetime.timedelta(minutes=self.entry.options.get(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, DEFAULT_REMEMBER_CONVERSATION_TIME_MINUTES))
-            last_conversation_age: datetime.timedelta = datetime.datetime.now() - self._last_response_id_time
+            configured_memory_time: datetime.timedelta = datetime.timedelta(
+                minutes=self.entry.options.get(
+                    CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
+                    DEFAULT_REMEMBER_CONVERSATION_TIME_MINUTES,
+                )
+            )
+            last_conversation_age: datetime.timedelta = (
+                datetime.datetime.now() - self._last_response_id_time
+            )
             _LOGGER.debug(f"Conversation ID age: {last_conversation_age}")
             if last_conversation_age < configured_memory_time:
-                _LOGGER.debug(f"Using previous response ID {self._last_response_id} for context")
+                _LOGGER.debug(
+                    f"Using previous response ID {self._last_response_id} for context"
+                )
                 request_params["previous_response_id"] = self._last_response_id
             else:
-                _LOGGER.debug(f"Previous response ID {self._last_response_id} is too old, not using it for context")
+                _LOGGER.debug(
+                    f"Previous response ID {self._last_response_id} is too old, not using it for context"
+                )
 
         return endpoint, request_params
 
@@ -1361,12 +1628,18 @@ class GenericOpenAIResponsesAPIAgent(BaseOpenAICompatibleAPIAgent):
         Returns True or raises an error
         """
         required_response_keys = ["object", "output", "status", "id"]
-        missing_keys = [key for key in required_response_keys if key not in response_json]
+        missing_keys = [
+            key for key in required_response_keys if key not in response_json
+        ]
         if missing_keys:
-            raise ValueError(f"Response JSON is missing required keys: {', '.join(missing_keys)}")
+            raise ValueError(
+                f"Response JSON is missing required keys: {', '.join(missing_keys)}"
+            )
 
         if response_json["object"] != "response":
-            raise ValueError(f"Response JSON object is not 'response', got {response_json['object']}")
+            raise ValueError(
+                f"Response JSON object is not 'response', got {response_json['object']}"
+            )
 
         if "error" in response_json and response_json["error"] is not None:
             error = response_json["error"]
@@ -1384,7 +1657,9 @@ class GenericOpenAIResponsesAPIAgent(BaseOpenAICompatibleAPIAgent):
         API ref: https://platform.openai.com/docs/api-reference/responses/object#responses_object-status
         """
         if response_json["status"] != "completed":
-            _LOGGER.warning(f"Response status is not 'completed', got {response_json['status']}. Details: {response_json.get('incomplete_details', 'No details provided')}")
+            _LOGGER.warning(
+                f"Response status is not 'completed', got {response_json['status']}. Details: {response_json.get('incomplete_details', 'No details provided')}"
+            )
 
     def _extract_response(self, response_json: dict) -> str:
         self._validate_response_payload(response_json)
@@ -1393,15 +1668,21 @@ class GenericOpenAIResponsesAPIAgent(BaseOpenAICompatibleAPIAgent):
         outputs = response_json["output"]
 
         if len(outputs) > 1:
-            _LOGGER.warning("Received multiple outputs from the Responses API, returning the first one.")
+            _LOGGER.warning(
+                "Received multiple outputs from the Responses API, returning the first one."
+            )
 
         output = outputs[0]
 
         if not output["type"] == "message":
-            raise NotImplementedError(f"Response output type is not 'message', got {output['type']}")
+            raise NotImplementedError(
+                f"Response output type is not 'message', got {output['type']}"
+            )
 
         if len(output["content"]) > 1:
-            _LOGGER.warning("Received multiple content items in the response output, returning the first one.")
+            _LOGGER.warning(
+                "Received multiple content items in the response output, returning the first one."
+            )
 
         content = output["content"][0]
 
@@ -1415,7 +1696,9 @@ class GenericOpenAIResponsesAPIAgent(BaseOpenAICompatibleAPIAgent):
         elif output_type == "output_text":
             to_return = content["text"]
         else:
-            raise ValueError(f"Response output content type is not expected, got {output_type}")
+            raise ValueError(
+                f"Response output content type is not expected, got {output_type}"
+            )
 
         # Save the response_id and return the successful response.
         response_id = response_json["id"]
@@ -1429,9 +1712,12 @@ class GenericOpenAIResponsesAPIAgent(BaseOpenAICompatibleAPIAgent):
 
         endpoint, additional_params = self._responses_params(conversation)
 
-        result = await self._async_generate_with_parameters(conversation, endpoint, additional_params)
+        result = await self._async_generate_with_parameters(
+            conversation, endpoint, additional_params
+        )
 
         return result
+
 
 class TextGenerationWebuiAgent(GenericOpenAIAPIAgent):
     admin_key: str
@@ -1448,18 +1734,21 @@ class TextGenerationWebuiAgent(GenericOpenAIAPIAgent):
                 headers["Authorization"] = f"Bearer {self.admin_key}"
 
             async with session.get(
-                f"{self.api_host}/v1/internal/model/info",
-                headers=headers
+                f"{self.api_host}/v1/internal/model/info", headers=headers
             ) as response:
                 response.raise_for_status()
                 currently_loaded_result = await response.json()
 
             loaded_model = currently_loaded_result["model_name"]
             if loaded_model == self.model_name:
-                _LOGGER.info(f"Model {self.model_name} is already loaded on the remote backend.")
+                _LOGGER.info(
+                    f"Model {self.model_name} is already loaded on the remote backend."
+                )
                 return
             else:
-                _LOGGER.info(f"Model is not {self.model_name} loaded on the remote backend. Loading it now...")
+                _LOGGER.info(
+                    f"Model is not {self.model_name} loaded on the remote backend. Loading it now..."
+                )
 
             async with session.post(
                 f"{self.api_host}/v1/internal/model/load",
@@ -1468,31 +1757,44 @@ class TextGenerationWebuiAgent(GenericOpenAIAPIAgent):
                     # TODO: expose arguments to the user in home assistant UI
                     # "args": {},
                 },
-                headers=headers
+                headers=headers,
             ) as response:
                 response.raise_for_status()
 
         except Exception as ex:
             _LOGGER.debug("Connection error was: %s", repr(ex))
-            raise ConfigEntryNotReady("There was a problem connecting to the remote server") from ex
+            raise ConfigEntryNotReady(
+                "There was a problem connecting to the remote server"
+            ) from ex
 
     def _chat_completion_params(self, conversation: dict) -> (str, dict):
         preset = self.entry.options.get(CONF_TEXT_GEN_WEBUI_PRESET)
-        chat_mode = self.entry.options.get(CONF_TEXT_GEN_WEBUI_CHAT_MODE, DEFAULT_TEXT_GEN_WEBUI_CHAT_MODE)
+        chat_mode = self.entry.options.get(
+            CONF_TEXT_GEN_WEBUI_CHAT_MODE, DEFAULT_TEXT_GEN_WEBUI_CHAT_MODE
+        )
 
         endpoint, request_params = super()._chat_completion_params(conversation)
 
         request_params["mode"] = chat_mode
-        if chat_mode == TEXT_GEN_WEBUI_CHAT_MODE_CHAT or chat_mode == TEXT_GEN_WEBUI_CHAT_MODE_CHAT_INSTRUCT:
+        if (
+            chat_mode == TEXT_GEN_WEBUI_CHAT_MODE_CHAT
+            or chat_mode == TEXT_GEN_WEBUI_CHAT_MODE_CHAT_INSTRUCT
+        ):
             if preset:
                 request_params["character"] = preset
         elif chat_mode == TEXT_GEN_WEBUI_CHAT_MODE_INSTRUCT:
-            request_params["instruction_template"] = self.entry.options.get(CONF_PROMPT_TEMPLATE, DEFAULT_PROMPT_TEMPLATE)
+            request_params["instruction_template"] = self.entry.options.get(
+                CONF_PROMPT_TEMPLATE, DEFAULT_PROMPT_TEMPLATE
+            )
 
-        request_params["truncation_length"] = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
+        request_params["truncation_length"] = self.entry.options.get(
+            CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+        )
         request_params["top_k"] = self.entry.options.get(CONF_TOP_K, DEFAULT_TOP_K)
         request_params["min_p"] = self.entry.options.get(CONF_MIN_P, DEFAULT_MIN_P)
-        request_params["typical_p"] = self.entry.options.get(CONF_TYPICAL_P, DEFAULT_TYPICAL_P)
+        request_params["typical_p"] = self.entry.options.get(
+            CONF_TYPICAL_P, DEFAULT_TYPICAL_P
+        )
 
         return endpoint, request_params
 
@@ -1504,19 +1806,27 @@ class TextGenerationWebuiAgent(GenericOpenAIAPIAgent):
         if preset:
             request_params["preset"] = preset
 
-        request_params["truncation_length"] = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
+        request_params["truncation_length"] = self.entry.options.get(
+            CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+        )
         request_params["top_k"] = self.entry.options.get(CONF_TOP_K, DEFAULT_TOP_K)
         request_params["min_p"] = self.entry.options.get(CONF_MIN_P, DEFAULT_MIN_P)
-        request_params["typical_p"] = self.entry.options.get(CONF_TYPICAL_P, DEFAULT_TYPICAL_P)
+        request_params["typical_p"] = self.entry.options.get(
+            CONF_TYPICAL_P, DEFAULT_TYPICAL_P
+        )
 
         return endpoint, request_params
 
     def _extract_response(self, response_json: dict) -> str:
         choices = response_json["choices"]
         if choices[0]["finish_reason"] != "stop":
-            _LOGGER.warning("Model response did not end on a stop token (unfinished sentence)")
+            _LOGGER.warning(
+                "Model response did not end on a stop token (unfinished sentence)"
+            )
 
-        context_len = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
+        context_len = self.entry.options.get(
+            CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+        )
         max_tokens = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
         if response_json["usage"]["prompt_tokens"] + max_tokens > context_len:
             self._warn_context_size()
@@ -1527,19 +1837,21 @@ class TextGenerationWebuiAgent(GenericOpenAIAPIAgent):
         else:
             return choices[0]["text"]
 
+
 class LlamaCppPythonAPIAgent(GenericOpenAIAPIAgent):
     """https://llama-cpp-python.readthedocs.io/en/latest/server/"""
+
     grammar: str
 
     async def _async_load_model(self, entry: ConfigEntry):
         await super()._async_load_model(entry)
 
-        return await self.hass.async_add_executor_job(
-            self._load_model, entry
-        )
+        return await self.hass.async_add_executor_job(self._load_model, entry)
 
     def _load_model(self, entry: ConfigEntry):
-        with open(os.path.join(os.path.dirname(__file__), DEFAULT_GBNF_GRAMMAR_FILE)) as f:
+        with open(
+            os.path.join(os.path.dirname(__file__), DEFAULT_GBNF_GRAMMAR_FILE)
+        ) as f:
             self.grammar = "".join(f.readlines())
 
     def _chat_completion_params(self, conversation: dict) -> (str, dict):
@@ -1564,6 +1876,7 @@ class LlamaCppPythonAPIAgent(GenericOpenAIAPIAgent):
 
         return endpoint, request_params
 
+
 class OllamaAPIAgent(LocalLLMAgent):
     api_host: str
     api_key: str
@@ -1574,7 +1887,7 @@ class OllamaAPIAgent(LocalLLMAgent):
             hostname=entry.data[CONF_HOST],
             port=entry.data[CONF_PORT],
             ssl=entry.data[CONF_SSL],
-            path=""
+            path="",
         )
         self.api_key = entry.data.get(CONF_OPENAI_API_KEY)
         self.model_name = entry.data.get(CONF_CHAT_MODEL)
@@ -1595,20 +1908,28 @@ class OllamaAPIAgent(LocalLLMAgent):
 
         except Exception as ex:
             _LOGGER.debug("Connection error was: %s", repr(ex))
-            raise ConfigEntryNotReady("There was a problem connecting to the remote server") from ex
+            raise ConfigEntryNotReady(
+                "There was a problem connecting to the remote server"
+            ) from ex
 
-        model_names = [ x["name"] for x in currently_downloaded_result["models"] ]
+        model_names = [x["name"] for x in currently_downloaded_result["models"]]
         if ":" in self.model_name:
-            if not any([ name == self.model_name for name in model_names]):
-                raise ConfigEntryNotReady(f"Ollama server does not have the provided model: {self.model_name}")
-        elif not any([ name.split(":")[0] == self.model_name for name in model_names ]):
-            raise ConfigEntryNotReady(f"Ollama server does not have the provided model: {self.model_name}")
+            if not any([name == self.model_name for name in model_names]):
+                raise ConfigEntryNotReady(
+                    f"Ollama server does not have the provided model: {self.model_name}"
+                )
+        elif not any([name.split(":")[0] == self.model_name for name in model_names]):
+            raise ConfigEntryNotReady(
+                f"Ollama server does not have the provided model: {self.model_name}"
+            )
 
     def _chat_completion_params(self, conversation: dict) -> (str, dict):
         request_params = {}
 
         endpoint = "/api/chat"
-        request_params["messages"] = [ { "role": x["role"], "content": x["message"] } for x in conversation ]
+        request_params["messages"] = [
+            {"role": x["role"], "content": x["message"]} for x in conversation
+        ]
 
         return endpoint, request_params
 
@@ -1617,13 +1938,15 @@ class OllamaAPIAgent(LocalLLMAgent):
 
         endpoint = "/api/generate"
         request_params["prompt"] = self._format_prompt(conversation)
-        request_params["raw"] = True # ignore prompt template
+        request_params["raw"] = True  # ignore prompt template
 
         return endpoint, request_params
 
     def _extract_response(self, response_json: dict) -> str:
         if response_json["done"] not in ["true", True]:
-            _LOGGER.warning("Model response did not end on a stop token (unfinished sentence)")
+            _LOGGER.warning(
+                "Model response did not end on a stop token (unfinished sentence)"
+            )
 
         # TODO: this doesn't work because ollama caches prompts and doesn't always return the full prompt length
         # context_len = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
@@ -1637,21 +1960,29 @@ class OllamaAPIAgent(LocalLLMAgent):
             return response_json["message"]["content"]
 
     async def _async_generate(self, conversation: dict) -> str:
-        context_length = self.entry.options.get(CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH)
+        context_length = self.entry.options.get(
+            CONF_CONTEXT_LENGTH, DEFAULT_CONTEXT_LENGTH
+        )
         max_tokens = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
         temperature = self.entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
         top_p = self.entry.options.get(CONF_TOP_P, DEFAULT_TOP_P)
         top_k = self.entry.options.get(CONF_TOP_K, DEFAULT_TOP_K)
         typical_p = self.entry.options.get(CONF_TYPICAL_P, DEFAULT_TYPICAL_P)
         timeout = self.entry.options.get(CONF_REQUEST_TIMEOUT, DEFAULT_REQUEST_TIMEOUT)
-        keep_alive = self.entry.options.get(CONF_OLLAMA_KEEP_ALIVE_MIN, DEFAULT_OLLAMA_KEEP_ALIVE_MIN)
-        use_chat_api = self.entry.options.get(CONF_REMOTE_USE_CHAT_ENDPOINT, DEFAULT_REMOTE_USE_CHAT_ENDPOINT)
-        json_mode = self.entry.options.get(CONF_OLLAMA_JSON_MODE, DEFAULT_OLLAMA_JSON_MODE)
+        keep_alive = self.entry.options.get(
+            CONF_OLLAMA_KEEP_ALIVE_MIN, DEFAULT_OLLAMA_KEEP_ALIVE_MIN
+        )
+        use_chat_api = self.entry.options.get(
+            CONF_REMOTE_USE_CHAT_ENDPOINT, DEFAULT_REMOTE_USE_CHAT_ENDPOINT
+        )
+        json_mode = self.entry.options.get(
+            CONF_OLLAMA_JSON_MODE, DEFAULT_OLLAMA_JSON_MODE
+        )
 
         request_params = {
             "model": self.model_name,
             "stream": False,
-            "keep_alive": f"{keep_alive}m", # prevent ollama from unloading the model
+            "keep_alive": f"{keep_alive}m",  # prevent ollama from unloading the model
             "options": {
                 "num_ctx": context_length,
                 "top_p": top_p,
@@ -1659,7 +1990,7 @@ class OllamaAPIAgent(LocalLLMAgent):
                 "typical_p": typical_p,
                 "temperature": temperature,
                 "num_predict": max_tokens,
-            }
+            },
         }
 
         if json_mode:
@@ -1683,7 +2014,7 @@ class OllamaAPIAgent(LocalLLMAgent):
                 f"{self.api_host}{endpoint}",
                 json=request_params,
                 timeout=timeout,
-                headers=headers
+                headers=headers,
             ) as response:
                 response.raise_for_status()
                 result = await response.json()
